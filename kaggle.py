@@ -25,6 +25,14 @@ def write_submission(s, name, expected_seasons=4):
     submission.to_csv(name, index=False)
 
 
+def write_submission_with_names(s, name):
+    teams = pd.read_csv('2018/teams.csv')
+    teams.rename(columns={'TeamID': 'team', 'TeamName': 'name'}, inplace=True)
+    s2 = merge_home_away(s, teams, keys=[])
+    s2 = s2[['name_home', 'name_away', col_pred, 'team_home', 'team_away']]
+    s2.to_csv(name, index=False)
+
+
 def read_kaggle_season(ncaaCsv, year=None, ncaa=False):
     g = pd.read_csv(ncaaCsv)
     if year is not None:

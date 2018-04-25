@@ -22,16 +22,29 @@
 #   4) Rebuild the KenPom ratings
 #   5) Try to run the code below (make_submission)
 
+
+# Pythagorean:
+#   - get win percentage for each team using formula
+#   - normalize the sums
+#
+# Four factors
+#   - logistic regression
+#
+# ELO
+#   - compute...
+#
+# Eigenvalue centrality
+
 import numpy as np
 import math
 import pandas as pd
 from kenpom import *
 from kaggle import *
+from model_keras import *
 
 from sklearn.linear_model import LogisticRegression
 
-
-massey = '2018/MasseyOrdinals_2018_133_only_43Systems.csv'
+massey = '2018/Massey_Full.csv'
 nathan = '2018/nathan.csv'
 
 ###############################################################################
@@ -117,18 +130,13 @@ def get_tourney_distances():
 
 def score_submission(name):
     r = get_submission_data(name)
-    result = get_submission_stats(r['y'], r[col_pred])
+    result = get_submission_stats('All', r['y'], r[col_pred])
+    d = []
     for season, group in r.groupby('season'):
-        print(season, get_submission_stats(group['y'], group[col_pred]))
+        d.append(get_submission_stats(season, group['y'], group[col_pred]))
+    s = pd.DataFrame(data=d, columns=['season', 'win_pct', 'log loss', 'wins', 'brier'])
+    print(s)
     return result
-
-
-def write_submission_with_names(s, name):
-    teams = pd.read_csv('2018/teams.csv')
-    teams.rename(columns={'TeamID': 'team', 'TeamName': 'name'}, inplace=True)
-    s2 = merge_home_away(s, teams, keys=[])
-    s2 = s2[['name_home', 'name_away', col_pred, 'team_home', 'team_away']]
-    s2.to_csv(name, index=False)
 
 
 def get_upsets(name):
@@ -202,6 +210,10 @@ def make_team_features():
     r2 = pd.merge(r1, k, left_on=['team', 'season'], right_on=['team', 'season'], how='inner')
     ff = read_four_factors()
     ratings = pd.merge(r2, ff, left_on=['team', 'season'], right_on=['team', 'season'], how='inner')
+    print('massey seasons: %s' % m['season'].unique())
+    print('nathan seasons: %s' % r['season'].unique())
+    print('kenpom seasons: %s' % k['season'].unique())
+    print('4factr seasons: %s' % ff['season'].unique())
     print('Created team features for the following seasons: %s' % list(ratings['season'].unique()))
     return normalize(ratings)
 
@@ -244,7 +256,8 @@ def retained_features(X):
     return game_keys + ratings + years + ['y', 'home_factor'] + suffix(f, 'home') + suffix(f, 'away')
 
 
-def make_categorical_dummies(X):
+def make_categorical_dummies(X, current_season):
+    years = list(range(2003, current_season+1))
     X = pd.concat([X, pd.get_dummies(X['season'], prefix='season')], axis=1)
     dummies = []
     for y in years:
@@ -259,16 +272,18 @@ def make_categorical_dummies(X):
 
 def check_feature_matrix(ncaa, X_ncaa, check_complete=True):
     # todo check me for NAN
-    if check_complete and X_ncaa.shape[0] != ncaa.shape[0]:
+    if check_complete and X_ncaa.shape[0] < ncaa.shape[0]:
         missing = set(list(ncaa['home'].unique()) + list(ncaa['away'].unique())) - set(
             list(X_ncaa['home'].unique()) + list(X_ncaa['away'].unique()))
-        raise ValueError("Feature matrix does not have enough rows %d/%d. These teams are missing: %s" % (
+        print(ncaa.head())
+        print(X_ncaa.head())
+        raise ValueError("Feature matrix has incorrect row count (%d != %d). These teams are missing: %s" % (
         X_ncaa.shape[0], ncaa.shape[0], missing))
 
 
-def make_features(games, team_features, make_y=True, binary_y=False, ignore_year=None):
-    print('Making features for %d games for %d teams and %d features.' % \
-          (games.shape[0], team_features.shape[0], team_features.shape[1]))
+def make_features(games, team_features, current_season, make_y=True, binary_y=False, ignore_year=None):
+    print('Making features for %d: %d games, %d teams, %d features.' % \
+          (current_season, games.shape[0], team_features.shape[0], team_features.shape[1]))
 
     if ignore_year is not None:
         print('Ignoring year %d.' % ignore_year)
@@ -279,7 +294,12 @@ def make_features(games, team_features, make_y=True, binary_y=False, ignore_year
         raise ValueError("No games provided.")
     X = merge_home_away(games, team_features)
     if X.shape[0] == 0:
+        print(games['season'].unique())
+        print(team_features['season'].unique())
         raise ValueError("Failed to create X - are you missing data for a season?")
+    #if X.shape[0] != games.shape[0]:
+    #    raise ValueError("Incorrect number of rows in feature matrix (%d / %d)." % (X.shape[0], games.shape[0]))
+
     y = None
     if make_y:
         if binary_y:
@@ -288,12 +308,12 @@ def make_features(games, team_features, make_y=True, binary_y=False, ignore_year
             diff = X.homesc - X.awaysc
             y = diff.apply(lambda x: win_probability(4.0 * x))
     X['y'] = y
-    w = None  # pow(0.95, 156.0 - np.array(X.daynum)) #X.daynum #/ 156.0
-    X = make_categorical_dummies(X)
+    weight = None  # pow(0.95, 156.0 - np.array(X.daynum)) #X.daynum #/ 156.0
+    X = make_categorical_dummies(X, current_season)
     X = X[retained_features(X)].copy()
     y = X['y'].copy()
     del X['y']
-    return X, y, w
+    return X, y, weight
 
 
 def get_estimator():
@@ -361,7 +381,8 @@ def create_upsets(s2, pred_tol=default_upset_tol, seed_tol=2):
     return submission
 
 
-def replace_pred(s, X, y):
+# replace predicted values in X with the values in y.
+def update_predicted_in_submission(s, X, y):
     s2 = s
     del s2[col_pred]
     X[col_pred] = y
@@ -371,7 +392,7 @@ def replace_pred(s, X, y):
 
 
 # make a submission based on logistic regression
-def make_submission(ratings=None, phase=1, season_file='2018/regularseasondetailedresults.csv'):
+def make_submission(ratings=None, phase=1, season_file='2018/regularseasondetailedresults.csv', current_season=2018):
     if ratings is None:
         ratings = make_team_features()
 
@@ -382,23 +403,53 @@ def make_submission(ratings=None, phase=1, season_file='2018/regularseasondetail
         ignore_year = None
         sub_file = '2018/samplesubmissionStage2.csv'
 
+    print("TRAINING")
+    print("--------")
     games = make_training_games(season_file)
-    X, y, w = make_features(games, ratings, binary_y=True, ignore_year=ignore_year)
+    X, y, w = make_features(games, ratings, current_season, binary_y=True, ignore_year=ignore_year)
     check_feature_matrix(games, X, check_complete=False)
-    ncaa = make_tourney_games(sub_file)
-    ncaa_tourneys = len(ncaa['season'].unique())
+    print("")
 
-    X_ncaa, y_ncaa, w_ncaa = make_features(ncaa, ratings, make_y=False, ignore_year=ignore_year)
-    check_feature_matrix(ncaa, X_ncaa)
+    print("SCORING")
+    print("--------")
+    ncaa_games = make_tourney_games(sub_file)
+    X_ncaa, y_ncaa, w_ncaa = make_features(ncaa_games, ratings, current_season, make_y=False, ignore_year=ignore_year)
+    check_feature_matrix(ncaa_games, X_ncaa)
+    print("")
 
     est = get_estimator()
     predict = lambda X, y, X_ncaa: est.fit(X, y).predict_proba(X_ncaa)[:, 1]
     y_fit = estimate(X, y, X_ncaa, predict=predict)
-    s = replace_pred(ncaa, X_ncaa, y_fit)
-    s = create_upsets(s, pred_tol=default_upset_tol)
-    write_submission(s, 'output/submission.csv', ncaa_tourneys)
-    write_submission_with_names(s, 'output/submission_names.csv')
-    if phase == 1:
-        return score_submission('output/submission.csv')
-    else:
-        return ()
+    submission = update_predicted_in_submission(ncaa_games, X_ncaa, y_fit)
+    submission = create_upsets(submission, pred_tol=default_upset_tol)
+
+    # submission must have home, away, and Pred columns.
+    ncaa_tourneys = len(ncaa_games['season'].unique())
+    write_submission(submission, 'output/submission.csv', ncaa_tourneys)
+    write_submission_with_names(submission, 'output/submission_names.csv')
+    return score_submission('output/submission.csv') if phase == 1 else None
+
+def make_keras(ratings=None, sub_file='sample_submission_0.csv', season_file='regularseasondetailedresults.csv'):
+  if ratings is None:
+    ratings = make_team_features()
+  games = make_training_games(season_file)
+  num_teams = games.shape[0]
+  index_count = len(game_keys)
+
+  X, y, w = make_features(games, ratings, binary_y=True)
+  check_feature_matrix(games, X, check_complete=False)
+  ncaa = make_tourney_games(sub_file)
+
+  X_ncaa, y_ncaa, w_ncaa = make_features(ncaa, ratings, make_y=False)
+  check_feature_matrix(ncaa, X_ncaa)
+
+  num_features = X.shape[1] - index_count
+  model = create_keras_model(num_teams, num_features)
+  predict = lambda X, y, X_ncaa: estimate_keras(model, X, y, X_ncaa, w=w)
+  #y_fit = estimate(X, y, X_ncaa, get_partitions=get_partitions_by, predict=predict)
+  y_fit = estimate(X, y, X_ncaa, predict=predict)
+
+  s = update_predicted_in_submission(ncaa, X_ncaa, y_fit)
+  write_submission(s, 'submission.csv')
+  write_submission_with_names(s, 'submission_names.csv')
+  return score_submission('submission.csv')

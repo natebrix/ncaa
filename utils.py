@@ -5,9 +5,9 @@ from sklearn.metrics import log_loss, brier_score_loss
 # This is my magic constant for home court advantage, in points.
 # I have no idea why it is this value - I just grabbed what I used in 2017. In past years I did something smarter.
 home_factor = 1.0
-current_season = 2018
-years = list(range(2003, current_season+1)) # this is correct: if current year is 2018, we are looking at 2017 season.
-y_cols = ['season_%d' % y for y in years]
+# current_season = 2018
+#years = list(range(2003, current_season+1)) # this is correct: if current year is 2018, we are looking at 2017 season.
+#y_cols = ['season_%d' % y for y in years]
 
 massey_date = '%m/%d/%Y'
 wolfe_date = '%d-%b-%y'
@@ -67,11 +67,11 @@ def predicted_correctly(y_true, y_pred):
     return np.logical_or(np.logical_and(y_pred >= 0.5, y_true >= 0.99), np.logical_and(y_pred < 0.5, y_true < 0.01))
 
 
-def get_submission_stats(y_true, y_pred):
+def get_submission_stats(season, y_true, y_pred):
     wins = np.count_nonzero(predicted_correctly(y_true, y_pred))
     loss = log_loss(y_true, y_pred, labels=[0.0, 1.0])
     brier = brier_score_loss(y_true, y_pred)
-    return 1.0 * wins / len(y_pred), loss, wins, brier
+    return season, 1.0 * wins / len(y_pred), loss, wins, brier
 
 
 def merge_home_away(ncaa, ff, keys=['season']):

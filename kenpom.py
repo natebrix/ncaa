@@ -24,9 +24,9 @@ def convert_kenpom_name(x):
     return x.translate(remove_digits).strip().lower()
 
 
-def get_kenpom_data(year=current_season+1):
+def get_kenpom_data(year):
     print("Fetching KenPom data for year %s" % year)
-    html = requests.get('http://kenpom.com/index.php?y=%d' % year)
+    html = requests.get('http://kenpom.com/index.php?y=%d' % year, verify=False)
     soup = BeautifulSoup(html.text, "lxml")
     teams = []
     table = soup.find(id="ratings-table")
@@ -43,12 +43,16 @@ def get_kenpom_data(year=current_season+1):
     return teams
 
 
-def create_kenpom(name='2018/kenpom.csv'):
+def create_kenpom(name='2018/kenpom.csv', current_season=2018, strict=False):
     t_map = pd.read_csv('2018/teamspellings.csv', encoding = "ISO-8859-1")
     t_all = []
     for year in range(2003, current_season + 1):
         t = get_kenpom_data(year)
         teams = pd.merge(t, t_map, left_on='name_spelling', right_on='TeamNameSpelling')
+        if strict and t.shape[0] != teams.shape[0]:
+            missing = set(t['name_spelling'].unique()) - set(t_map['TeamNameSpelling'].unique())
+            print(missing)
+            raise ValueError('Some records were lost in determining team ids. Check for new or renamed institutions.')
         t_all.append(teams)
     k = pd.concat(t_all)
     k.rename(columns={'TeamID': 'team'}, inplace=True)
